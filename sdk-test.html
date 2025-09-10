@@ -153,6 +153,16 @@
             
             <label for="sdkToken">SDK Token (or leave empty for demo):</label>
             <input type="text" id="sdkToken" placeholder="your-sdk-token" value="">
+
+            <label for="environment">Environment:</label>
+            <select id="environment" onchange="onEnvChange()">
+                <option value="development">development</option>
+                <option value="production">production</option>
+            </select>
+
+            <label for="baseUrl">Base URL (optional override):</label>
+            <input type="text" id="baseUrl" placeholder="https://dev.gopremium.africa" value="">
+            <button onclick="applyBaseUrlOverride()">Apply Base URL</button>
         </div>
 
         <div class="test-section">
@@ -185,6 +195,14 @@
             <button onclick="clearTokenForm()" id="clearTokenFormBtn" disabled>Clear Token Form</button>
             <div id="tokenFormResult" class="result" style="display: none;"></div>
             <div id="tokenFormContainer" class="form-container"></div>
+            <div style="margin-top:12px;">
+                <label for="tokenAmount" style="display:block; margin-bottom:6px; font-weight:500; color:#374151;">Charge Amount (USD):</label>
+                <input type="number" id="tokenAmount" step="0.01" min="0.50" value="1.00" style="width:200px; padding:8px 12px; border:1px solid #d1d5db; border-radius:4px;">
+            </div>
+            <div style="margin-top:10px;">
+                <button onclick="chargeToken()" id="chargeTokenBtn" disabled>Charge Last Token (3DS Test)</button>
+            </div>
+            <div id="tokenChargeResult" class="result" style="display:none;"></div>
         </div>
 
         <div class="test-section">
@@ -201,19 +219,38 @@
         </div>
     </div>
 
-    <!-- Set empty configuration to prevent auto-initialization -->
+    <!-- Configure environment before loading SDK -->
     <script>
-        // Set empty config to prevent auto-initialization
-        window.AxraPayConfig = {};
+        window.AxraPayConfig = {
+            environment: (location.hostname === 'localhost' ? 'development' : 'production'),
+            // baseUrl: 'https://dev.gopremium.africa', // Optional override
+        };
     </script>
 
-    <!-- Load the AxraPay SDK from your local development server -->
+    <!-- Load the AxraPay SDK (dev server or production) -->
     <script src="https://dev.gopremium.africa/sdk.dev.js"></script>
     
     <script>
         let isSDKInitialized = false;
+        let lastCreatedTokenId = '';
 
-        // Logging function
+        function onEnvChange() {
+            const env = document.getElementById('environment').value;
+            window.AxraPayConfig = { ...window.AxraPayConfig, environment: env };
+            log('Environment set to: ' + env);
+        }
+
+        function applyBaseUrlOverride() {
+            const url = document.getElementById('baseUrl').value.trim();
+            if (url) {
+                window.AxraPayConfig = { ...window.AxraPayConfig, baseUrl: url };
+                log('Base URL override set to: ' + url);
+            } else {
+                if (window.AxraPayConfig.baseUrl) delete window.AxraPayConfig.baseUrl;
+                log('Base URL override cleared');
+            }
+        }
+
         function log(message, type = 'info') {
             const timestamp = new Date().toISOString().substr(11, 12);
             const logElement = document.getElementById('logs');
@@ -234,7 +271,6 @@
             element.style.display = 'block';
         }
 
-        // Test SDK Initialization
         async function testSDKInitialization() {
             log('Starting SDK initialization test...');
             showResult('initResult', '🔄 Testing SDK initialization...', 'info');
@@ -244,50 +280,37 @@
                 const businessId = document.getElementById('businessId').value;
                 const sdkToken = document.getElementById('sdkToken').value;
 
-                if (!publishableKey || !businessId) {
-                    throw new Error('Please provide both publishable key and business ID');
+                if (!publishableKey || !businessId || !sdkToken) {
+                    throw new Error('Please provide both publishable key, sdk token and business ID');
                 }
 
-                // Check if AxraPay is available
                 if (typeof window.AxraPay === 'undefined') {
                     throw new Error('AxraPay SDK not loaded. Check if the script loaded correctly.');
                 }
 
-                log(`Using form values - Key: ${publishableKey}, Business: ${businessId}`);
+                log(`Using form values - Key: ${publishableKey}, Business: ${businessId}, SDK Token: ${sdkToken}`);
 
-                // Update the global configuration with form values
                 window.AxraPayConfig = {
+                    ...window.AxraPayConfig,
                     publishableKey: publishableKey,
                     businessId: businessId,
-                    getSdkToken: async () => {
-                        if (sdkToken) {
-                            log(`Using provided SDK token: ${sdkToken}`);
-                            return sdkToken;
-                        }
-                        // For demo purposes, return a mock token
-                        log('Using demo SDK token (replace with real token for production)');
-                        return 'demo-sdk-token-123';
-                    }
+                    getSdkToken: async () => sdkToken,
                 };
 
-                log('Configuration updated with form values, initializing SDK...');
-                log('Current AxraPayConfig:', JSON.stringify(window.AxraPayConfig, null, 2));
+                log('Configuration updated. ENV=' + window.AxraPayConfig.environment + (window.AxraPayConfig.baseUrl ? (', baseUrl=' + window.AxraPayConfig.baseUrl) : ''));
 
-                // Force the SDK to use the new configuration by reinitializing
-                // Reset the SDK instance with the new configuration
                 if (window.AxraPay && typeof window.AxraPay.reset === 'function') {
                     log('Resetting SDK instance...');
                     window.AxraPay.reset();
                 }
 
-                // Initialize the SDK with the new configuration
                 log('Initializing SDK with new configuration...');
                 await window.AxraPay.initialize();
                 
                 isSDKInitialized = true;
                 document.getElementById('paymentBtn').disabled = false;
                 document.getElementById('cardFormBtn').disabled = false;
-                document.getElementById('tokenFormBtn').disabled = false;
+                document.getElementById('tokenFormBtn').disabled = false; // Enable action button
                 
                 log('SDK initialized successfully with form values!', 'success');
                 showResult('initResult', '✅ SDK initialized successfully! Business config loaded.', 'success');
@@ -298,11 +321,10 @@
                 isSDKInitialized = false;
                 document.getElementById('paymentBtn').disabled = true;
                 document.getElementById('cardFormBtn').disabled = true;
-                document.getElementById('tokenFormBtn').disabled = true;
+                document.getElementById('tokenFormBtn').disabled = true; // Disable action button
             }
         }
 
-        // Test Payment Intent Creation
         async function testPaymentIntent() {
             if (!isSDKInitialized) {
                 showResult('paymentResult', '❌ Please initialize the SDK first', 'error');
@@ -316,11 +338,8 @@
                 const result = await window.AxraPay.createPaymentIntent({
                     amount: 29.99,
                     currency: 'USD',
-                    businessId: document.getElementById('businessId').value, // Use form value
-                    customerData: {
-                        name: 'Test User',
-                        email: 'test@example.com'
-                    },
+                    businessId: document.getElementById('businessId').value,
+                    customerData: { name: 'Test User', email: 'test@example.com' },
                     description: 'External SDK Test Payment'
                 });
 
@@ -333,7 +352,6 @@
             }
         }
 
-        // Test Card Form Mounting
         async function testCardForm() {
             if (!isSDKInitialized) {
                 showResult('cardFormResult', '❌ Please initialize the SDK first', 'error');
@@ -351,10 +369,7 @@
                     amount: 29.99,
                     currency: 'USD',
                     businessId: businessId,
-                    customerData: {
-                        name: 'Test User',
-                        email: 'test@example.com'
-                    },
+                    customerData: { name: 'Test User', email: 'test@example.com' },
                     description: 'External SDK Card Form Test',
                     onSuccess: (paymentIntent) => {
                         log(`Card form payment successful: ${paymentIntent.id}`, 'success');
@@ -376,7 +391,6 @@
             }
         }
 
-        // Clear Card Form
         function clearCardForm() {
             const container = document.getElementById('cardFormContainer');
             container.innerHTML = '';
@@ -385,7 +399,6 @@
             document.getElementById('clearCardFormBtn').disabled = true;
         }
 
-        // Test Token Form Mounting
         async function testTokenForm() {
             if (!isSDKInitialized) {
                 showResult('tokenFormResult', '❌ Please initialize the SDK first', 'error');
@@ -398,22 +411,14 @@
             try {
                 await window.AxraPay.mountTokenForm({
                     selector: '#tokenFormContainer',
-                    customerData: {
-                        name: 'Test User',
-                        email: 'test@example.com'
-                    },
-                    style: {
-                        backgroundColor: '#10b981',
-                        borderRadius: '8px',
-                        padding: '12px 24px',
-                        fontSize: '16px'
-                    },
+                    customerData: { name: 'Test User', email: 'test@example.com' },
+                    style: { backgroundColor: '#10b981', borderRadius: '8px', padding: '12px 24px', fontSize: '16px' },
                     onSuccess: (result) => {
                         log(`Token created successfully: ${result.token.id}`, 'success');
                         showResult('tokenFormResult', `✅ Token created successfully! ID: ${result.token.id}`, 'success');
-                        
-                        // Show the token for testing
-                        log('Token details:', result.token);
+                        lastCreatedTokenId = result.token.id;
+                        const chargeBtn = document.getElementById('chargeTokenBtn');
+                        if (chargeBtn) chargeBtn.disabled = false;
                     },
                     onError: (error) => {
                         log(`Token creation failed: ${error}`, 'error');
@@ -431,16 +436,65 @@
             }
         }
 
-        // Clear Token Form
         function clearTokenForm() {
             const container = document.getElementById('tokenFormContainer');
             container.innerHTML = '';
             showResult('tokenFormResult', 'Token form cleared', 'info');
             log('Token form cleared');
             document.getElementById('clearTokenFormBtn').disabled = true;
+            const chargeBtn = document.getElementById('chargeTokenBtn');
+            if (chargeBtn) chargeBtn.disabled = true;
+            lastCreatedTokenId = '';
         }
 
-        // Test CORS Headers
+        async function chargeToken() {
+            if (!isSDKInitialized) {
+                showResult('tokenChargeResult', '❌ Please initialize the SDK first', 'error');
+                return;
+            }
+            if (!lastCreatedTokenId) {
+                showResult('tokenChargeResult', '❌ Please create a token first', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('chargeTokenBtn');
+            const amountInput = document.getElementById('tokenAmount');
+            const businessId = document.getElementById('businessId').value;
+            const amountVal = parseFloat(amountInput.value || '0');
+            if (isNaN(amountVal) || amountVal < 0.5) {
+                showResult('tokenChargeResult', '❌ Enter a valid amount (>= 0.50)', 'error');
+                return;
+            }
+
+            try {
+                if (btn) { btn.disabled = true; btn.textContent = 'Charging...'; }
+                showResult('tokenChargeResult', '🔄 Charging tokenized card (may trigger 3DS)...', 'info');
+
+                const result = await window.AxraPay.tokenizedCardPayment({
+                    amount: amountVal,
+                    currency: 'USD',
+                    businessId: businessId,
+                    paymentId: 'pay_' + Date.now(),
+                    customerId: 'test@example.com',
+                    tokenId: lastCreatedTokenId,
+                    description: 'SDK Test Tokenized Charge',
+                });
+
+                if (result.status === 'succeeded') {
+                    log(`Token charge succeeded: ${result.id}`, 'success');
+                    showResult('tokenChargeResult', `✅ Token charge succeeded! ID: ${result.id}`, 'success');
+                } else {
+                    log(`Token charge status: ${result.status}`, 'info');
+                    showResult('tokenChargeResult', `ℹ️ Token charge status: ${result.status}`, 'info');
+                }
+            } catch (error) {
+                log(`Token charge failed: ${error.message || error}`, 'error');
+                showResult('tokenChargeResult', `❌ Token charge failed: ${error.message || error}`, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Charge Last Token (3DS Test)'; }
+            }
+        }
+
         async function testCORS() {
             log('Testing CORS headers...');
             showResult('corsResult', '🔄 Testing CORS headers...', 'info');
@@ -456,19 +510,13 @@
 
                 const response = await fetch(`https://dev.gopremium.africa/api/sdk/config?businessId=${businessId}`, {
                     method: 'GET',
-                    headers: {
-                        'X-AxraPay-Publishable-Key': publishableKey,
-                        'Authorization': `Bearer ${sdkToken}`
-                    }
+                    headers: { 'X-AxraPay-Publishable-Key': publishableKey, 'Authorization': `Bearer ${sdkToken}` }
                 });
 
                 log(`Response status: ${response.status}`);
-                log(`Response headers: ${JSON.stringify([...response.headers.entries()])}`);
                 
-                // If we get here without a CORS error, CORS is working!
                 if (response.ok) {
                     log('CORS test passed - Cross-origin request successful!', 'success');
-                    log('Note: CORS headers are not exposed to JavaScript for security reasons', 'info');
                     showResult('corsResult', '✅ CORS test passed! Cross-origin requests are working correctly.', 'success');
                 } else {
                     log(`CORS test failed - HTTP error: ${response.status}`, 'error');
@@ -486,14 +534,18 @@
             }
         }
 
-        // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             log('External SDK test page loaded');
             log('Current origin: ' + window.location.origin);
             log('Testing from: ' + window.location.href);
+            log('ENV: ' + (window.AxraPayConfig && window.AxraPayConfig.environment));
             log('Target SDK server: https://dev.gopremium.africa');
+            // Initialize env selector
+            const envSel = document.getElementById('environment');
+            if (envSel) {
+                envSel.value = window.AxraPayConfig.environment || 'production';
+            }
             
-            // Check if SDK is loaded with retry mechanism
             setTimeout(() => {
                 if (typeof window.AxraPay !== 'undefined') {
                     log('AxraPay SDK loaded successfully', 'success');
